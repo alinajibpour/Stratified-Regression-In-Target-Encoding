@@ -92,11 +92,11 @@ print(f"Standard Deviation of RMSE: {np.std(fold_results)}")
 
 #%%
 # Output overall results
-print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
-print(f"Standard deviation of RMSE: {np.std(fold_results):.4f}")
-print("\nBest alpha values for each fold:")
-for i, alpha in enumerate(best_alphas):
-    print(f"Fold {i+1}: {alpha}")
+#print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
+#print(f"Standard deviation of RMSE: {np.std(fold_results):.4f}")
+#print("\nBest alpha values for each fold:")
+#for i, alpha in enumerate(best_alphas):
+    #print(f"Fold {i+1}: {alpha}")
 #%%
 #Output overall results
 print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
