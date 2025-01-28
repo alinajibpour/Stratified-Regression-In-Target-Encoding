@@ -19,50 +19,47 @@ data_directory = os.path.join(working_directory, 'dataset')
 datasets = {"Ames": "AmesHousing.csv", "IPPS": "Inpatient_Prospective_Payment_System__IPPS__Provider_Summary_for_the_Top_100_Diagnosis-Related_Groups__DRG__-_FY2011.csv", "Salary":"ds_salaries.csv", "Automobile":"clean_automobile_data.csv"}
 #%%
 # Importing the dataset
-df_Inpatient=pd.read_csv(os.path.join(data_directory, datasets["IPPS"]))
-df_Inpatient.shape
-df_Inpatient.head()
-df_Inpatient.info()
-df_Inpatient.columns = df_Inpatient.columns.str.strip()
+df_salary=pd.read_csv(os.path.join(data_directory, datasets["Salary"]))
+df_salary.shape
+df_salary.head()
+df_salary.info()
+df_salary.columns = df_salary.columns.str.strip()
 #%%
 # Handling missing data
-#columns_with_missing_values = AmesHousing.columns[AmesHousing.isnull().any()]
-#AmesHousing[columns_with_missing_values].isnull().sum()
-#AmesHousing = AmesHousing.dropna(axis=1)
-#AmesHousing.shape
-#AmesHousing.head()
+columns_with_missing_values = df_salary.columns[df_salary.isnull().any()]
+df_salary[columns_with_missing_values].isnull().sum()
+AmeHousing= df_salary.dropna(axis=1)
+df_salary.shape
+df_salary.head()
 #%%
 #group-size discretization
-target_column ='Average Total Payments'
+target_column ='salary'
 num_bins = 5
-df_Inpatient['Average Total Payments _disc'] = pd.qcut(df_Inpatient[target_column], num_bins, labels=False)
-df_Inpatient['Average Total Payments _disc'].value_counts()
+df_salary['salary_disc'] = pd.qcut(df_salary[target_column], num_bins, labels=False)
+df_salary['salary_disc'].value_counts()
 #%%
-encoded_df_Inpatient = df_Inpatient.copy()
+encoded_df_salary= df_salary.copy()
 # GLMM encoding with 5-fold cross-validation
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
-categorical_columns = df_Inpatient.select_dtypes(include=['object']).columns
-for train_index, test_index in kf.split(df_Inpatient):
-    train_data, test_data = df_Inpatient.iloc[train_index], df_Inpatient.iloc[test_index]
+categorical_columns = df_salary.select_dtypes(include=['object']).columns
+for train_index, test_index in kf.split(df_salary):
+    train_data, test_data = df_salary.iloc[train_index], df_salary.iloc[test_index]
     encoder = GLMMEncoder(cols=categorical_columns)
-    encoder.fit(train_data, train_data['Average Total Payments _disc'])
-    encoded_df_Inpatient.loc[test_index, categorical_columns] = encoder.transform(test_data)
-encoded_df_Inpatient.head()    
+    encoder.fit(train_data, train_data['salary_disc'])
+    encoded_df_salary.loc[test_index, categorical_columns] = encoder.transform(test_data)
+encoded_df_salary.head()    
 #%%    
 #Define features (X) and target (y)
-X = encoded_df_Inpatient.drop(columns=['Average Total Payments', 'Average Total Payments _disc'])  # Drop target columns
-y = encoded_df_Inpatient['Average Total Payments _disc']  # Use stratified target variabl
+X = encoded_df_salary.drop(columns=['salary', 'salary_disc'])  # Drop target columns
+y = encoded_df_salary['salary_disc']  # Use stratified target variabl
 #Initialize StratifiedKFold
 skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 #%%
 # Store results for each fold
 fold_results = []
-best_alphas = []
 
-# Define parameter grid for Lasso
-param_grid = {
-    'alpha': [0.001, 0.01, 0.1, 1.0, 10.0]
-}
+# Define a constant alpha for Lasso
+alpha_value = 0.1  # Replace this with the desired constant alpha
 
 for train_index, test_index in skf.split(X, y):
     # Split the data
@@ -73,33 +70,25 @@ for train_index, test_index in skf.split(X, y):
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
-    
-    # Initialize GridSearchCV for hyperparameter tuning
-    inner_cv = KFold(n_splits=5, shuffle=True, random_state=42)  # Inner CV for hyperparameter tuning
-    grid_search = GridSearchCV(
-        estimator=Lasso(random_state=42),
-        param_grid=param_grid,
-        cv=inner_cv,
-        scoring='neg_mean_squared_error',
-        n_jobs=-1
-    )
-    
-    # Fit GridSearchCV on the training data
-    grid_search.fit(X_train_scaled, y_train)
-    
-    # Store the best alpha value
-    best_alpha = grid_search.best_params_['alpha']
-    best_alphas.append(best_alpha)
-    
-    # Predict on the test set using the best model
-    y_pred = grid_search.predict(X_test_scaled)
-    
+
+    # Initialize Lasso with the constant alpha value
+    lasso_model = Lasso(alpha=alpha_value, random_state=42)
+
+    # Fit the model on the training data
+    lasso_model.fit(X_train_scaled, y_train)
+
+    # Predict on the test set
+    y_pred = lasso_model.predict(X_test_scaled)
+
     # Calculate metrics (e.g., RMSE)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     fold_results.append(rmse)
-    
+
     print(f"Fold RMSE: {rmse}")
-    print(f"Best alpha: {best_alpha}\n")
+
+# Optionally, print summary statistics for RMSE across folds
+print(f"Mean RMSE: {np.mean(fold_results)}")
+print(f"Standard Deviation of RMSE: {np.std(fold_results)}")
 
 #%%
 # Output overall results
