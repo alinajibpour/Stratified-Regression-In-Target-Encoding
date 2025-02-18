@@ -1,243 +1,237 @@
 #%%
-# Importing the libraries
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from sklearn.model_selection import StratifiedKFold
-from category_encoders import GLMMEncoder
 import matplotlib.pyplot as plt
-from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.model_selection import KFold
 from sklearn.linear_model import Lasso
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV
+from sklearn.compose import TransformedTargetRegressor
+from category_encoders import GLMMEncoder
 import os
-#%%
-working_directory = os.getcwd()
-data_directory = os.path.join(working_directory, 'dataset')
-datasets = {"Ames": "AmesHousing.csv", "IPPS": "Inpatient_Prospective_Payment_System__IPPS__Provider_Summary_for_the_Top_100_Diagnosis-Related_Groups__DRG__-_FY2011.csv", "Salary":"ds_salaries.csv", "Automobile":"clean_automobile_data.csv"}
-#%%
-# Importing the dataset
-df_salary=pd.read_csv(os.path.join(data_directory, datasets["Salary"]))
-df_salary.shape
-df_salary.head()
-df_salary.info()
-df_salary.columns = df_salary.columns.str.strip()
-#%%
-# Handling missing data
-columns_with_missing_values = df_salary.columns[df_salary.isnull().any()]
-df_salary[columns_with_missing_values].isnull().sum()
-AmeHousing= df_salary.dropna(axis=1)
-df_salary.shape
-df_salary.head()
-#%%
-#group-size discretization
-target_column ='salary'
-num_bins = 5
-df_salary['salary_disc'] = pd.qcut(df_salary[target_column], num_bins, labels=False)
-df_salary['salary_disc'].value_counts()
-#%%
-encoded_df_salary= df_salary.copy()
-# GLMM encoding with 5-fold cross-validation
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-categorical_columns = df_salary.select_dtypes(include=['object']).columns
-for train_index, test_index in kf.split(df_salary):
-    train_data, test_data = df_salary.iloc[train_index], df_salary.iloc[test_index]
-    encoder = GLMMEncoder(cols=categorical_columns)
-    encoder.fit(train_data, train_data['salary_disc'])
-    encoded_df_salary.loc[test_index, categorical_columns] = encoder.transform(test_data)
-encoded_df_salary.head()    
-#%%    
-#Define features (X) and target (y)
-X = encoded_df_salary.drop(columns=['salary', 'salary_disc'])  # Drop target columns
-y = encoded_df_salary['salary_disc']  # Use stratified target variabl
-#Initialize StratifiedKFold
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-#%%
-# Store results for each fold
-fold_results = []
-
-# Define a constant alpha for Lasso
-alpha_value = 0.1  # Replace this with the desired constant alpha
-
-for train_index, test_index in skf.split(X, y):
-    # Split the data
-    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-
-    # Standardize the features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    # Initialize Lasso with the constant alpha value
-    lasso_model = Lasso(alpha=alpha_value, random_state=42)
-
-    # Fit the model on the training data
-    lasso_model.fit(X_train_scaled, y_train)
-
-    # Predict on the test set
-    y_pred = lasso_model.predict(X_test_scaled)
-
-    # Calculate metrics (e.g., RMSE)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    fold_results.append(rmse)
-
-    print(f"Fold RMSE: {rmse}")
-
-# Optionally, print summary statistics for RMSE across folds
-print(f"Mean RMSE: {np.mean(fold_results)}")
-print(f"Standard Deviation of RMSE: {np.std(fold_results)}")
-
-#%%
-# Output overall results
-#print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
-#print(f"Standard deviation of RMSE: {np.std(fold_results):.4f}")
-#print("\nBest alpha values for each fold:")
-#for i, alpha in enumerate(best_alphas):
-    #print(f"Fold {i+1}: {alpha}")
-#%%
-#Output overall results
-print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
-#%%
-# Nested Cross-Validation with Lasso
-def nested_cv_lasso_with_existing_folds(X, y, outer_cv, inner_splits=5):
-    # Initialize arrays to store results
-    outer_scores = []
+# %%
+def create_stratified_folds(y, n_splits=5):
+    """
+    Create stratified folds for regression by binning the target variable.
+    Returns fold indices that maintain similar target distribution.
+    """
+    # Create bins for stratification
+    bins = pd.qcut(y, q=n_splits, labels=False)
+    
+    # Initialize folds
+    fold_indices = []
+    for fold in range(n_splits):
+        test_idx = np.where(bins == fold)[0]
+        train_idx = np.where(bins != fold)[0]
+        fold_indices.append((train_idx, test_idx))
+    
+    return fold_indices
+# %%
+def create_pipeline():
+    """Create a pipeline with scaling, target transformation, and Lasso regression."""
+    # Create the base regressor with transformed target
+    base_regressor = TransformedTargetRegressor(
+        regressor=Lasso(random_state=42),
+        transformer=StandardScaler()
+    )
+    
+    # Create the full pipeline
+    return Pipeline([
+        ('scaler', StandardScaler()),
+        ('regressor', base_regressor)
+    ])
+# %%
+def cross_validated_glmm_encoding(df, categorical_columns, target_column, n_splits=5):
+    """
+    Perform GLMM encoding with k-fold cross-validation to prevent data leakage.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe
+    categorical_columns : list
+        List of categorical column names
+    target_column : str
+        Name of the target variable
+    n_splits : int
+        Number of cross-validation folds
+    
+    Returns:
+    --------
+    pd.DataFrame : Encoded dataframe
+    """
+    # Create a copy of the dataframe to store encoded values
+    encoded_df = df.copy()
+    
+    # Create KFold object
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    
+    # Perform cross-validated encoding
+    for train_idx, test_idx in kf.split(df):
+        # Split data
+        train_data = df.iloc[train_idx]
+        test_data = df.iloc[test_idx]
+        
+        # Fit encoder on training data
+        encoder = GLMMEncoder(cols=categorical_columns)
+        encoder.fit(train_data[categorical_columns], 
+                   train_data[target_column])
+        
+        # Transform test data
+        encoded_values = encoder.transform(test_data[categorical_columns])
+        
+        # Update encoded dataframe with transformed values
+        encoded_df.iloc[test_idx, [encoded_df.columns.get_loc(col) for col in categorical_columns]] = encoded_values
+    
+    return encoded_df
+# %%
+def evaluate_cv_method(X, y, cv_type='simple', n_splits=5):
+    """
+    Evaluate model performance using either simple or stratified cross-validation.
+    
+    Parameters:
+    -----------
+    X : pd.DataFrame
+        Feature matrix
+    y : pd.Series
+        Target variable
+    cv_type : str
+        Type of cross-validation ('simple' or 'stratified')
+    n_splits : int
+        Number of cross-validation folds
+    
+    Returns:
+    --------
+    list : Cross-validation scores (RMSE)
+    dict : Best parameters for each fold
+    """
+    param_grid = {
+        'regressor__regressor__alpha': np.logspace(-4, 1, 20)
+    }
+    
+    scores = []
     best_params = []
     
-    # Outer loop using the existing folds from stratified CV
-    for outer_fold, (train_idx, test_idx) in enumerate(outer_cv.split(X, y)):
-        # Split data into outer train and test sets
-        X_train_outer, X_test_outer = X.iloc[train_idx], X.iloc[test_idx]
-        y_train_outer, y_test_outer = y.iloc[train_idx], y.iloc[test_idx]
+    # Create fold indices based on CV type
+    if cv_type == 'stratified':
+        fold_indices = create_stratified_folds(y, n_splits)
+    else:
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        fold_indices = list(kf.split(X))
+    
+    # Perform nested cross-validation
+    for fold, (train_idx, test_idx) in enumerate(fold_indices):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
         
-        # Scale the features
-        scaler = StandardScaler()
-        X_train_outer_scaled = scaler.fit_transform(X_train_outer)
-        X_test_outer_scaled = scaler.transform(X_test_outer)
+        # Inner cross-validation for hyperparameter tuning
+        inner_cv = KFold(n_splits=3, shuffle=True, random_state=42)
         
-        # Define parameter grid for Lasso
-        param_grid = {
-            'alpha': [0.001, 0.01, 0.1, 1.0, 10.0]
-        }
-        
-        # Initialize inner cross-validation
-        inner_cv = KFold(n_splits=inner_splits, shuffle=True, random_state=42)
-        
-        # Initialize GridSearchCV for inner loop
+        # Grid search with inner cross-validation
         grid_search = GridSearchCV(
-            estimator=Lasso(random_state=42),
-            param_grid=param_grid,
+            create_pipeline(),
+            param_grid,
             cv=inner_cv,
             scoring='neg_mean_squared_error',
             n_jobs=-1
         )
         
-        # Fit GridSearchCV on outer training data
-        grid_search.fit(X_train_outer_scaled, y_train_outer)
+        # Fit model
+        grid_search.fit(X_train, y_train)
         
-        # Store best parameters from inner loop
+        # Predict and evaluate
+        y_pred = grid_search.predict(X_test)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        scores.append(rmse)
         best_params.append(grid_search.best_params_)
         
-        # Get predictions using best model from inner loop
-        y_pred = grid_search.predict(X_test_outer_scaled)
-        
-        # Calculate and store RMSE for outer fold
-        rmse = np.sqrt(mean_squared_error(y_test_outer, y_pred))
-        outer_scores.append(rmse)
-        
-        print(f"Outer Fold {outer_fold + 1}:")
-        print(f"Best alpha: {grid_search.best_params_['alpha']}")
-        print(f"RMSE: {rmse:.4f}\n")
+        print(f"{cv_type} CV - Fold {fold + 1} - RMSE: ${rmse:,.2f}")
+        print(f"Best parameters: {grid_search.best_params_}")
     
-    return outer_scores, best_params
-
-# Use the existing stratified folds (skf) from your original code
-nested_scores, nested_params = nested_cv_lasso_with_existing_folds(X, y, skf)
-
-# Print overall results
-print("Nested Cross-Validation Results:")
-print(f"Average RMSE: {np.mean(nested_scores):.4f}")
-print(f"Standard deviation of RMSE: {np.std(nested_scores):.4f}")
-print("\nBest alpha values for each outer fold:")
-for i, params in enumerate(nested_params):
-    print(f"Fold {i+1}: {params['alpha']}")
-
-# Compare with original stratified CV results
-print("\nComparison with Original Stratified CV:")
-print(f"Original CV Average RMSE: {np.mean(fold_results):.4f}")
-print(f"Nested CV Average RMSE: {np.mean(nested_scores):.4f}")
+    return scores, best_params
 #%%
-def plot_cv_comparison(fold_results, nested_scores):
-    """
-    Create comprehensive visualization comparing stratified and nested CV results
+def preprocess_data(df, target_column):
+    """Preprocess the data with cross-validated GLMM encoding for categorical variables."""
+    # Handle missing values
+    df = df.dropna()
     
-    Parameters:
-    fold_results (list): RMSE results from stratified CV
-    nested_scores (list): RMSE results from nested CV
-    """
-    # Set figure size and create subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    # Identify categorical columns
+    categorical_columns = df.select_dtypes(include=['object']).columns
     
-    # 1. Bar plot comparison across folds
-    folds = range(1, len(fold_results) + 1)
-    width = 0.35
-    
-    ax1.bar([x - width/2 for x in folds], fold_results, width, 
-            label='Stratified CV', color='#8884d8', alpha=0.7)
-    ax1.bar([x + width/2 for x in folds], nested_scores, width, 
-            label='Nested CV', color='#82ca9d', alpha=0.7)
-    
-    ax1.set_xlabel('Fold')
-    ax1.set_ylabel('RMSE')
-    ax1.set_title('Lasso: RMSE Comparison Across Folds')
-    ax1.set_xticks(folds)
-    ax1.grid(True, linestyle='--', alpha=0.7)
-    ax1.legend()
-    
-    # 2. Box plot comparison
-    ax2.boxplot([fold_results, nested_scores], labels=['Stratified CV', 'Nested CV'])
-    ax2.set_ylabel('RMSE')
-    ax2.set_title('Lasso: Distribution of RMSE Values')
-    ax2.grid(True, linestyle='--', alpha=0.7)
-    
-    # 3. Line plot showing trends across folds
-    ax3.plot(folds, fold_results, 'o-', label='Stratified CV', color='#8884d8')
-    ax3.plot(folds, nested_scores, 'o-', label='Nested CV', color='#82ca9d')
-    ax3.set_xlabel('Fold')
-    ax3.set_ylabel('RMSE')
-    ax3.set_title('Lasso: RMSE Trends Across Folds')
-    ax3.grid(True, linestyle='--', alpha=0.7)
-    ax3.legend()
-    
-    # 4. Mean and std comparison
-    means = [np.mean(fold_results), np.mean(nested_scores)]
-    stds = [np.std(fold_results), np.std(nested_scores)]
-    
-    ax4.bar(['Stratified CV', 'Nested CV'], means, yerr=stds, 
-            capsize=5, alpha=0.7, color=['#8884d8', '#82ca9d'])
-    ax4.set_ylabel('Mean RMSE')
-    ax4.set_title('Lasso: Average RMSE with Standard Deviation')
-    ax4.grid(True, linestyle='--', alpha=0.7)
-    
-    # Add text annotations with statistics
-    stats_text = (
-        f'Lasso Results:\n\n'
-        f'Stratified CV:\n'
-        f'Mean: {np.mean(fold_results):.4f}\n'
-        f'Std: {np.std(fold_results):.4f}\n\n'
-        f'Nested CV:\n'
-        f'Mean: {np.mean(nested_scores):.4f}\n'
-        f'Std: {np.std(nested_scores):.4f}\n'
+    # Apply cross-validated GLMM encoding
+    encoded_df = cross_validated_glmm_encoding(
+        df, 
+        categorical_columns=categorical_columns,
+        target_column=target_column
     )
-    fig.text(0.02, 0.02, stats_text, fontsize=10, family='monospace')
+    
+    return encoded_df
+#%%
+def plot_results(simple_cv_scores, stratified_cv_scores):
+    """Create visualization comparing CV methods."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Box plot
+    cv_results = {
+        'Simple CV': simple_cv_scores,
+        'Stratified CV': stratified_cv_scores
+    }
+    sns.boxplot(data=cv_results, ax=ax1)
+    ax1.set_title('Distribution of RMSE Scores')
+    ax1.set_ylabel('RMSE ($)')
+    
+    # Line plot
+    iterations = range(1, len(simple_cv_scores) + 1)
+    ax2.plot(iterations, simple_cv_scores, marker='o', label='Simple CV', linestyle='-')
+    ax2.plot(iterations, stratified_cv_scores, marker='s', label='Stratified CV', linestyle='-')
+    ax2.set_title('RMSE Scores Across Folds')
+    ax2.set_xlabel('Fold')
+    ax2.set_ylabel('RMSE ($)')
+    ax2.legend()
     
     plt.tight_layout()
-    return fig
+    plt.show()
+#%%
+def main():
+    # Load data
+    working_directory = os.getcwd()
+    data_directory = os.path.join(working_directory, 'dataset')
+    df = pd.read_csv(os.path.join(data_directory, "ds_salaries.csv"))
+    print(df.head())
+    # Clean column names
+    df.columns = df.columns.str.strip()
+    
+    # Preprocess data with cross-validated GLMM encoding
+    target_column = 'salary'
+    encoded_df = preprocess_data(df, target_column)
+    
+    # Prepare features and target
+    X = encoded_df.drop([target_column], axis=1)
+    y = encoded_df[target_column]
+    
+    # Evaluate both CV methods
+    print("\nEvaluating Simple CV...")
+    simple_cv_scores, simple_best_params = evaluate_cv_method(X, y, 'simple')
+    
+    print("\nEvaluating Stratified CV...")
+    stratified_cv_scores, stratified_best_params = evaluate_cv_method(X, y, 'stratified')
+    
+    # Plot results
+    plot_results(simple_cv_scores, stratified_cv_scores)
+    
+    # Print summary statistics
+    print("\nSummary Statistics:")
+    print(f"Simple CV - Mean RMSE: ${np.mean(simple_cv_scores):,.2f} (±${np.std(simple_cv_scores):,.2f})")
+    print(f"Stratified CV - Mean RMSE: ${np.mean(stratified_cv_scores):,.2f} (±${np.std(stratified_cv_scores):,.2f})")
+    
+    # Calculate improvement
+    improvement = ((np.mean(simple_cv_scores) - np.mean(stratified_cv_scores)) / 
+                  np.mean(simple_cv_scores) * 100)
+    print(f"\nPercentage improvement with Stratified CV: {improvement:.2f}%")
 
-# Create and display the visualization
-fig = plot_cv_comparison(fold_results, nested_scores)
-plt.show()  
+if __name__ == "__main__":
+    main()
 #%%
