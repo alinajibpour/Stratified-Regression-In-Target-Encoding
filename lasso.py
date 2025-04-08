@@ -96,96 +96,96 @@ class FeatureProcessor(BaseEstimator, TransformerMixin):
         
         return np.hstack([num_processed, cat_processed])
 #%%
-def validate_feature_processing(processor, X_train, X_test, y_test, numerical_features, categorical_features):
-    """Comprehensive validation of feature processing"""
+# def validate_feature_processing(processor, X_train, X_test, y_test, numerical_features, categorical_features):
+#     """Comprehensive validation of feature processing"""
     
-    print("\n=== Numerical Feature Validation ===")
-    # Check numerical processing
-    num_pipeline = processor.num_pipeline
-    imputer = num_pipeline.named_steps['imputer']
-    scaler = num_pipeline.named_steps['scaler']
+#     print("\n=== Numerical Feature Validation ===")
+#     # Check numerical processing
+#     num_pipeline = processor.num_pipeline
+#     imputer = num_pipeline.named_steps['imputer']
+#     scaler = num_pipeline.named_steps['scaler']
     
-    # Imputation validation
-    train_means = X_train[numerical_features].mean().values
-    print("Imputer Statistics vs Training Means:")
-    print(np.c_[imputer.statistics_, train_means])
+#     # Imputation validation
+#     train_means = X_train[numerical_features].mean().values
+#     print("Imputer Statistics vs Training Means:")
+#     print(np.c_[imputer.statistics_, train_means])
     
-    # Scaling validation
-    scaled_means = scaler.mean_
-    scaled_stds = scaler.scale_
-    print("\nScaler Parameters vs Training Statistics:")
-    print(f"{'Feature':<15} | {'Scaler Mean':<10} | {'Data Mean':<10} | {'Scaler STD':<10} | {'Data STD':<10}")
-    for i, feat in enumerate(numerical_features):
-        data_mean = X_train[feat].mean()
-        data_std = X_train[feat].std()
-        print(f"{feat:<15} | {scaled_means[i]:<10.2f} | {data_mean:<10.2f} | {scaled_stds[i]:<10.2f} | {data_std:<10.2f}")
+#     # Scaling validation
+#     scaled_means = scaler.mean_
+#     scaled_stds = scaler.scale_
+#     print("\nScaler Parameters vs Training Statistics:")
+#     print(f"{'Feature':<15} | {'Scaler Mean':<10} | {'Data Mean':<10} | {'Scaler STD':<10} | {'Data STD':<10}")
+#     for i, feat in enumerate(numerical_features):
+#         data_mean = X_train[feat].mean()
+#         data_std = X_train[feat].std()
+#         print(f"{feat:<15} | {scaled_means[i]:<10.2f} | {data_mean:<10.2f} | {scaled_stds[i]:<10.2f} | {data_std:<10.2f}")
 
-    # Check transformed numerical features
-    X_transformed = processor.transform(X_train)
-    num_transformed = X_transformed[:, :len(numerical_features)]
-    print("\nScaled Numerical Features Statistics:")
-    print(f"Mean: {num_transformed.mean(axis=0).round(2)}")
-    print(f"Std: {num_transformed.std(axis=0).round(2)}")
+#     # Check transformed numerical features
+#     X_transformed = processor.transform(X_train)
+#     num_transformed = X_transformed[:, :len(numerical_features)]
+#     print("\nScaled Numerical Features Statistics:")
+#     print(f"Mean: {num_transformed.mean(axis=0).round(2)}")
+#     print(f"Std: {num_transformed.std(axis=0).round(2)}")
 
-    print("\n=== Categorical Feature Validation ===")
-    # Categorical encoding checks
-    print(f"Number of GLMM Encoders: {len(processor.cat_encoders)} (should equal n_splits)")
+#     print("\n=== Categorical Feature Validation ===")
+#     # Categorical encoding checks
+#     print(f"Number of GLMM Encoders: {len(processor.cat_encoders)} (should equal n_splits)")
     
-    # Training data encoding
-    print("\nTraining Data Encoding Sample:")
-    print(processor.encoded_train[:5])
+#     # Training data encoding
+#     print("\nTraining Data Encoding Sample:")
+#     print(processor.encoded_train[:5])
     
-    # Test data encoding
-    X_test_transformed = processor.transform(X_test)
-    cat_transformed_test = X_test_transformed[:, len(numerical_features):]
+#     # Test data encoding
+#     X_test_transformed = processor.transform(X_test)
+#     cat_transformed_test = X_test_transformed[:, len(numerical_features):]
     
-    # Manual encoding calculation
-    manual_encoded = np.median(
-        [encoder.transform(X_test[categorical_features]) for encoder in processor.cat_encoders],
-        axis=0
-    )
-    print("\nTest Encoding vs Manual Calculation Match:", np.allclose(cat_transformed_test, manual_encoded))
+#     # Manual encoding calculation
+#     manual_encoded = np.median(
+#         [encoder.transform(X_test[categorical_features]) for encoder in processor.cat_encoders],
+#         axis=0
+#     )
+#     print("\nTest Encoding vs Manual Calculation Match:", np.allclose(cat_transformed_test, manual_encoded))
 
-    print("\n=== Data Leakage Checks ===")
-    # Numerical leakage check
-    test_num_means = X_test[numerical_features].mean().values
-    print("Test Data Means vs Imputer Statistics:")
-    print(np.c_[test_num_means, imputer.statistics_])
+#     print("\n=== Data Leakage Checks ===")
+#     # Numerical leakage check
+#     test_num_means = X_test[numerical_features].mean().values
+#     print("Test Data Means vs Imputer Statistics:")
+#     print(np.c_[test_num_means, imputer.statistics_])
     
-    # Categorical leakage check
-    corr_matrix = np.corrcoef(cat_transformed_test.T, y_test)
-    max_corr = np.abs(corr_matrix[-1, :-1]).max()
-    print(f"\nMax Correlation between Test Encodings and Target: {max_corr:.4f}")
+#     # Categorical leakage check
+#     corr_matrix = np.corrcoef(cat_transformed_test.T, y_test)
+#     max_corr = np.abs(corr_matrix[-1, :-1]).max()
+#     print(f"\nMax Correlation between Test Encodings and Target: {max_corr:.4f}")
 
-    print("\n=== Dimension Validation ===")
-    expected_features = len(numerical_features) + len(categorical_features)
-    actual_features = X_transformed.shape[1]
-    print(f"Expected Features: {expected_features}, Actual Features: {actual_features}")
+#     print("\n=== Dimension Validation ===")
+#     expected_features = len(numerical_features) + len(categorical_features)
+#     actual_features = X_transformed.shape[1]
+#     print(f"Expected Features: {expected_features}, Actual Features: {actual_features}")
 
-    print("\n=== Missing Values Check ===")
-    print("NaNs in Transformed Data:", np.isnan(X_transformed).sum())
+#     print("\n=== Missing Values Check ===")
+#     print("NaNs in Transformed Data:", np.isnan(X_transformed).sum())
 
 #%%
-def plot_feature_distributions(processor, X_train, numerical_features, categorical_features):
-    """Visual validation of feature distributions"""
-    plt.figure(figsize=(12, 8))
+# def plot_feature_distributions(processor, X_train, numerical_features, categorical_features):
+#     """Visual validation of feature distributions"""
+#     plt.figure(figsize=(12, 8))
     
-    # Original vs Scaled Numerical Features
-    for i, feat in enumerate(numerical_features):
-        plt.subplot(2, 2, i+1)
-        sns.kdeplot(X_train[feat], label='Original')
-        sns.kdeplot(processor.transform(X_train)[:, i], label='Processed')
-        plt.title(f"{feat} Distribution")
-        plt.legend()
+#     # Original vs Scaled Numerical Features
+#     for i, feat in enumerate(numerical_features):
+#         plt.subplot(2, 2, i+1)
+#         sns.kdeplot(X_train[feat], label='Original')
+#         sns.kdeplot(processor.transform(X_train)[:, i], label='Processed')
+#         plt.title(f"{feat} Distribution")
+#         plt.legend()
     
-    # Encoded Categorical Features
-    plt.subplot(2, 2, 4)
-    encoded_cats = processor.transform(X_train)[:, len(numerical_features):].flatten()
-    sns.kdeplot(encoded_cats)
-    plt.title("Encoded Categorical Features Distribution")
+#     # Encoded Categorical Features
+#     plt.subplot(2, 2, 4)
+#     encoded_cats = processor.transform(X_train)[:, len(numerical_features):].flatten()
+#     sns.kdeplot(encoded_cats)
+#     plt.title("Encoded Categorical Features Distribution")
     
-    plt.tight_layout()
-    plt.show()
+#     plt.tight_layout()
+#     plt.show()
 #%%
 def process_fold(train_idx, test_idx, df, target, numerical_features, categorical_features):
     """
@@ -271,31 +271,31 @@ if __name__ == "__main__":
         random_state=SEED
     )
     # ================== VALIDATION CHECKS ==================
-    # Initialize and fit processor
-    validation_processor = FeatureProcessor(
-        numerical_features=numerical_features,
-        categorical_features=categorical_features,
-        encoder_cv_type='stratified'
-    )
-    validation_processor.fit(train_df.drop(columns=[target]), train_df[target])
+    # # Initialize and fit processor
+    # validation_processor = FeatureProcessor(
+    #     numerical_features=numerical_features,
+    #     categorical_features=categorical_features,
+    #     encoder_cv_type='stratified'
+    # )
+    # validation_processor.fit(train_df.drop(columns=[target]), train_df[target])
 
-    # Run comprehensive validation
-    validate_feature_processing(
-        processor=validation_processor,
-        X_train=train_df,
-        X_test=test_df,
-        y_test=test_df[target],
-        numerical_features=numerical_features,
-        categorical_features=categorical_features
-    )
+    # # Run comprehensive validation
+    # validate_feature_processing(
+    #     processor=validation_processor,
+    #     X_train=train_df,
+    #     X_test=test_df,
+    #     y_test=test_df[target],
+    #     numerical_features=numerical_features,
+    #     categorical_features=categorical_features
+    # )
 
-    # Visual distribution checks
-    plot_feature_distributions(
-        processor=validation_processor,
-        X_train=train_df,
-        numerical_features=numerical_features,
-        categorical_features=categorical_features
-    )
+    # # Visual distribution checks
+    # plot_feature_distributions(
+    #     processor=validation_processor,
+    #     X_train=train_df,
+    #     numerical_features=numerical_features,
+    #     categorical_features=categorical_features
+    # )
     # =======================================================
 
     # Prepare outer CV
