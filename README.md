@@ -12,4 +12,6 @@ These scripts investigate the application of the TargetEncoder in scikit-learn, 
 
 2. **GLMMEncoder Experiments**:
 
+These files apply the Generalized Linear Mixed Model (GLMM) Encoder for encoding categorical variables to find out whether using stratification with cross-validation when applying GLMM encoder for encoding categorical features improve machine learning moderls.
+
 
