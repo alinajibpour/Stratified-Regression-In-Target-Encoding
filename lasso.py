@@ -15,7 +15,8 @@ from category_encoders import GLMMEncoder
 from sklearn.preprocessing import StandardScaler  
 from sklearn.metrics import mean_squared_error  
 from sklearn.compose import TransformedTargetRegressor  
-from sklearn.base import BaseEstimator, TransformerMixin  
+from sklearn.base import BaseEstimator, TransformerMixin 
+from sklearn.preprocessing import PowerTransformer 
 import os  
 #%%
 # Set global random seed for reproducibility
@@ -253,15 +254,17 @@ def process_fold(train_idx, test_idx, df, target, numerical_features, categorica
 # Main execution block
 if __name__ == "__main__":
     # Load and prepare data
-    df = pd.read_csv('dataset/autoscout24-germany-dataset_cleaned.csv')
+    df = pd.read_csv('dataset/IPPS.csv')
     df.columns = df.columns.str.strip()
     
-    # Consistent feature naming throughout
-    numerical_features = ['mileage', 'hp', 'year']
+    #Consistent feature naming throughout
+    numerical_features = ['Total Discharges', 'Average Covered Charges', 'Average Medicare Payments']
     
-    categorical_features = ['make', 'model', 'fuel', 'gear', 'offerType']
-
-    target = 'price'
+    categorical_features = ['DRG Definition', 'Provider Name', 'Provider Street Address', 'Provider City', 'Provider State', 'Hospital Referral Region Description']
+    pt = PowerTransformer(method='yeo-johnson')
+    df['target_transformed'] = pt.fit_transform(df[['Average Total Payments']])
+    #df['target_transformed'] = np.log1p(df['Average Total Payments'])  # Log-transform target for better distribution
+    target = 'target_transformed'
 
     # Initial train-test split
     train_df, test_df = train_test_split(
@@ -362,58 +365,59 @@ def load_and_plot():
     # Load pre-computed results
     plot_data = pd.read_csv('plot_data.csv')
     test_results = pd.read_csv('test_results.csv')
-    
+
     # Create larger figure with adjusted proportions
-    plt.figure(figsize=(10, 7))  # Increased height from 6 to 7
+    plt.figure(figsize=(10, 7))
     ax = plt.gca()
-    
-    # Create plots
+
+    # Create boxplot
     sns.boxplot(
         data=plot_data,
         palette=['#4c72b0', '#dd8452'],
         width=0.5,
-        linewidth=1.5
+        linewidth=1.5,
+        ax=ax
     )
-    
+
+    # Create swarmplot
     sns.swarmplot(
         data=plot_data,
         color='#2d3436',
         size=6,
-        alpha=0.7
+        alpha=0.7,
+        ax=ax
     )
-    
-    # Customize plot with safer margins
-    plt.title("Cross-Validation RMSE Comparison\nStratified vs Simple Encoding", pad=18)  # Reduced pad
-    plt.ylabel("RMSE", labelpad=12)  # Reduced label padding
-    plt.xlabel("Encoding Strategy", labelpad=12)
-    
-    # Calculate axis limits before annotations
+
+    # Customize plot
+    plt.title("Cross-Validation RMSE Comparison\nStratifiedCV vs SimpleCV for Encoding categorical features", pad=16)
+    plt.ylabel("RMSE", labelpad=10)
+    plt.xlabel("Encoding Strategy", labelpad=10)
+
+    # Update limits **after** plotting to get correct y-axis bounds
     y_min, y_max = ax.get_ylim()
-    
-    # Add annotations with dynamic positioning
+
+    # Add annotations dynamically near the top of the plot
     means = plot_data.mean()
     for i, mean in enumerate(means):
-        plt.text(
+        ax.text(
             i, 
-            y_max * 0.98,  # Position at 98% of y-axis height
+            y_max - (y_max - y_min) * 0.03,  # 3% from the top
             f'Mean: {mean:.2f}',
             ha='center',
-            va='top',  # Align to top of text
+            va='top',
             fontsize=12,
             color='#d63031',
             bbox=dict(
                 facecolor='white',
                 edgecolor='#d63031',
-                boxstyle='round,pad=0.2'  # Smaller padding
+                boxstyle='round,pad=0.2'
             )
         )
-    
-    # Manual layout adjustment
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Use constrained layout instead of tight_layout
-    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Reserve 5% space at top
-    plt.savefig('results_plot.png', bbox_inches='tight')  # Extra margin safety
+
+    # Add grid and adjust layout
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig('results_plot_fixed.png', bbox_inches='tight')
     plt.close()
 
 if __name__ == "__main__":

@@ -1,258 +1,344 @@
+
 #%%
-import numpy as np
-import pandas as pd
-import seaborn as sns
-from sklearn.model_selection import StratifiedKFold
+import numpy as np  
+import pandas as pd  
+from joblib import Parallel, delayed 
+from sklearn.model_selection import RandomizedSearchCV 
+import random  
+import matplotlib.pyplot as plt  
+import seaborn as sns  
+from sklearn.impute import SimpleImputer  
+from sklearn.model_selection import (StratifiedKFold, KFold,  
+                                   GridSearchCV, train_test_split)  
+from sklearn.pipeline import Pipeline 
 from sklearn.svm import SVR
-from category_encoders import GLMMEncoder
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import KFold, GridSearchCV
-from sklearn.linear_model import Lasso
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
-import os
+from category_encoders import GLMMEncoder  
+from sklearn.preprocessing import StandardScaler  
+from sklearn.metrics import mean_squared_error  
+from sklearn.compose import TransformedTargetRegressor  
+from sklearn.base import BaseEstimator, TransformerMixin 
+from sklearn.preprocessing import PowerTransformer 
+import os  
+import warnings
 #%%
-working_directory = os.getcwd()
-data_directory = os.path.join(working_directory, 'dataset')
-datasets = {"Ames": "AmesHousing.csv", "IPPS": "Inpatient_Prospective_Payment_System__IPPS__Provider_Summary_for_the_Top_100_Diagnosis-Related_Groups__DRG__-_FY2011.csv", "Salary":"ds_salaries.csv", "Automobile":"clean_automobile_data.csv"}
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+os.environ['PYTHONHASHSEED'] = str(SEED)
 #%%
-# Importing the dataset
-df_automobile=pd.read_csv(os.path.join(data_directory, datasets["Automobile"]))
-df_automobile.shape
-df_automobile.head()
-df_automobile.info()
-#%%
-# Handling missing data
-#columns_with_missing_values = AmesHousing.columns[AmesHousing.isnull().any()]
-#AmesHousing[columns_with_missing_values].isnull().sum()
-#AmesHousing = AmesHousing.dropna(axis=1)
-#AmesHousing.shape
-#AmesHousing.head()
-#%%
-#group-size discretization
-target_column = 'price'
-num_bins = 5
-df_automobile['price_disc'] = pd.qcut(df_automobile[target_column], num_bins, labels=False)
-df_automobile['price_disc'].value_counts()
-#%%
-encoded_df_automobile = df_automobile.copy()
-# GLMM encoding with 5-fold cross-validation
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-categorical_columns = df_automobile.select_dtypes(include=['object']).columns
-for train_index, test_index in kf.split(df_automobile):
-    train_data, test_data = df_automobile.iloc[train_index], df_automobile.iloc[test_index]
-    encoder = GLMMEncoder(cols=categorical_columns)
-    encoder.fit(train_data, train_data['price_disc'])
-    encoded_df_automobile.loc[test_index, categorical_columns] = encoder.transform(test_data)
-encoded_df_automobile.head()  
-#%%
-#Define features (X) and target (y)
-X = encoded_df_automobile.drop(columns=['price', 'price_disc'])  # Drop target columns
-y = encoded_df_automobile['price_disc']  # Use stratified target variabl
-#Initialize StratifiedKFold
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-#%%
-# Store results for each fold
-fold_results = []
-
-for train_index, test_index in skf.split(X, y):
-    # Split the data
-    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-
-    # Standardize the features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+#Import necessary libraries
+class FeatureProcessor(BaseEstimator, TransformerMixin):
+    """
+    Custom transformer that handles:
+    - Numerical feature imputation and scaling
+    - Categorical feature encoding using GLMM
+    - Stratified or simple cross-validated encoding
+    """
     
-    # Train SVM model
-    svm = SVR(kernel='rbf', C=1.0)
-    svm.fit(X_train_scaled, y_train)
-    
-    # Predict on the test set
-    y_pred = svm.predict(X_test_scaled)
-    
-    # Calculate metrics (RMSE)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    fold_results.append(rmse)
-    print(f"Fold RMSE: {rmse}")
-
-# Output overall results
-print(f"Average RMSE across folds: {np.mean(fold_results):.4f}")
-#%%
-# Nested Cross-Validation with SVM
-def nested_cv_svm_with_existing_folds(X, y, outer_cv, inner_splits=5):
-    # Initialize arrays to store results
-    outer_scores = []
-    best_params = []
-    
-    # Outer loop using the existing folds from stratified CV
-    for outer_fold, (train_idx, test_idx) in enumerate(outer_cv.split(X, y)):
-        # Split data into outer train and test sets
-        X_train_outer, X_test_outer = X.iloc[train_idx], X.iloc[test_idx]
-        y_train_outer, y_test_outer = y.iloc[train_idx], y.iloc[test_idx]
+    def __init__(self, numerical_features, categorical_features, n_splits=5, 
+                 encoder_cv_type='simple', n_bins=5):
         
-        # Scale the features
-        scaler = StandardScaler()
-        X_train_outer_scaled = scaler.fit_transform(X_train_outer)
-        X_test_outer_scaled = scaler.transform(X_test_outer)
+        self.numerical_features = numerical_features  
+        self.categorical_features = categorical_features  
+        self.n_splits = n_splits  
+        self.encoder_cv_type = encoder_cv_type  
+        self.n_bins = n_bins  
         
-        # Define parameter grid for SVM
+        
+        self.num_pipeline = Pipeline([
+            ('imputer', SimpleImputer(strategy='mean')),  
+            ('scaler', StandardScaler())  
+        ])
+        
+        
+        self.cat_encoders = []  
+        self.X_index = None  
+        self.encoded_train = None  
+
+    def fit(self, X, y):
+        """Fit the processor to training data"""
+        self.X_index = X.index  
+        
+        
+        self.num_pipeline.fit(X[self.numerical_features])  
+        
+        
+        X_cat = X[self.categorical_features].copy()  
+        self.encoded_train = np.zeros((X.shape[0], len(self.categorical_features)))  
+        
+        
+        if self.encoder_cv_type == 'stratified':
+            y_binned = pd.qcut(y, q=self.n_bins, labels=False, duplicates='drop')
+            kf = StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=SEED)
+            splits = kf.split(X, y_binned)
+        else:
+            kf = KFold(n_splits=self.n_splits, shuffle=True, random_state=SEED)
+            splits = kf.split(X)
+
+        
+        for train_idx, val_idx in splits:
+            encoder = GLMMEncoder()  
+            encoder.fit(X_cat.iloc[train_idx], y.iloc[train_idx])  
+            self.cat_encoders.append(encoder)
+            self.encoded_train[val_idx] = encoder.transform(X_cat.iloc[val_idx])
+
+        return self
+
+    def transform(self, X):
+        """Transform input data using fitted processors"""
+        
+        num_processed = self.num_pipeline.transform(X[self.numerical_features])
+        
+        X_cat = X[self.categorical_features]
+        if X.index.equals(self.X_index):  
+            cat_processed = self.encoded_train  
+        else:
+            
+            encoded_list = [encoder.transform(X_cat) for encoder in self.cat_encoders]
+            cat_processed = np.median(encoded_list, axis=0)  
+        
+        return np.hstack([num_processed, cat_processed])
+#%%
+def process_fold(train_idx, test_idx, df, target, numerical_features, categorical_features):
+    """
+    Process one outer CV fold with:
+    - Nested hyperparameter tuning
+    - Both encoding strategies
+    - Validation set evaluation
+    """
+    # Consistent naming for data splits
+    X_train = df.iloc[train_idx].drop(columns=[target])  
+    y_train = df.iloc[train_idx][target]  
+    X_val = df.iloc[test_idx].drop(columns=[target]) 
+    y_val = df.iloc[test_idx][target]  
+
+    results = {}  
+    
+    # Evaluate both encoding strategies
+    for enc_type in ['stratified', 'simple']:
+        # Create pipeline with TransformedTargetRegressor wrapping SVR
+        pipe = Pipeline([
+            ('processor', FeatureProcessor(
+                numerical_features=numerical_features,
+                categorical_features=categorical_features,
+                encoder_cv_type=enc_type, 
+                n_bins=5
+            )),
+            ('regressor', TransformedTargetRegressor(
+                regressor=SVR(cache_size=2000),
+                transformer=StandardScaler()
+            ))
+        ])
+
+        # Create inner CV strategy
+        if enc_type == 'stratified':
+            y_binned = pd.qcut(y_train, q=5, labels=False, duplicates='drop')
+            inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+            inner_splits = inner_cv.split(X_train, y_binned)
+        else:
+            inner_cv = KFold(n_splits=5, shuffle=True, random_state=SEED)
+            inner_splits = inner_cv.split(X_train)
+
+        # Hyperparameter grid for SVR (updated paths)
         param_grid = {
-            'kernel': ['rbf', 'linear', 'poly'],
-            'C': [0.1, 1.0, 10.0, 100.0],
-            'gamma': ['scale', 'auto', 0.1, 0.01],
-            'epsilon': [0.1, 0.2, 0.3]
+            'regressor__regressor__C': [0.1, 1, 10, 100],
+            'regressor__regressor__kernel': ['rbf'],
+            'regressor__regressor__gamma': ['scale',0.1, 1, 10]
+            
         }
-        
-        # Initialize inner cross-validation
-        inner_cv = KFold(n_splits=inner_splits, shuffle=True, random_state=42)
-        
-        # Initialize GridSearchCV for inner loop
-        grid_search = GridSearchCV(
-            estimator=SVR(),
+
+        # Configure grid search
+        grid = GridSearchCV(
+            estimator=pipe,
             param_grid=param_grid,
-            cv=inner_cv,
-            scoring='neg_mean_squared_error',
-            n_jobs=-1
+            cv=inner_splits,  
+            scoring='neg_mean_squared_error',  
+            n_jobs=1, 
+            verbose=0
         )
         
-        # Fit GridSearchCV on outer training data
-        grid_search.fit(X_train_outer_scaled, y_train_outer)
+        # Train and validate
+        grid.fit(X_train, y_train)
+        preds = grid.predict(X_val)
+        results[f'rmse_{enc_type}'] = np.sqrt(mean_squared_error(y_val, preds))
         
-        # Store best parameters from inner loop
-        best_params.append(grid_search.best_params_)
+        # Store best parameters (updated paths)
+        best_params = grid.best_params_
+        results[f'best_C_{enc_type}'] = best_params['regressor__regressor__C']
+        results[f'best_kernel_{enc_type}'] = best_params['regressor__regressor__kernel']
+        results[f'best_gamma_{enc_type}'] = best_params['regressor__regressor__gamma']
         
-        # Get predictions using best model from inner loop
-        y_pred = grid_search.predict(X_test_outer_scaled)
-        
-        # Calculate and store RMSE for outer fold
-        rmse = np.sqrt(mean_squared_error(y_test_outer, y_pred))
-        outer_scores.append(rmse)
-        
-        print(f"Outer Fold {outer_fold + 1}:")
-        print(f"Best parameters: {grid_search.best_params_}")
-        print(f"RMSE: {rmse:.4f}\n")
     
-    return outer_scores, best_params
+    return results
 
-# Use the existing stratified folds
-nested_scores, nested_params = nested_cv_svm_with_existing_folds(X, y, skf)
-
-# Print overall results
-print("Nested Cross-Validation Results:")
-print(f"Average RMSE: {np.mean(nested_scores):.4f}")
-print(f"Standard deviation of RMSE: {np.std(nested_scores):.4f}")
-print("\nBest parameters for each outer fold:")
-for i, params in enumerate(nested_params):
-    print(f"Fold {i+1}: {params}")
-
-# Compare with original stratified CV results
-print("\nComparison with Original Stratified CV:")
-print(f"Original CV Average RMSE: {np.mean(fold_results):.4f}")
-print(f"Nested CV Average RMSE: {np.mean(nested_scores):.4f}")
 #%%
-def plot_cv_comparison(fold_results, nested_scores):
-    """
-    Create comprehensive visualization comparing stratified and nested CV results for SVM
+#Main execution block
+if __name__ == "__main__":
+    #Load and prepare data
+    df = pd.read_csv('dataset/IPPS.csv')
+    df.columns = df.columns.str.strip()
     
-    Parameters:
-    fold_results (list): RMSE results from stratified CV
-    nested_scores (list): RMSE results from nested CV
-    """
-    # Create figure and subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    #Consistent feature naming throughout
+    numerical_features = ['Total Discharges', 'Average Covered Charges', 'Average Medicare Payments']
     
-    # Colors for consistency
-    strat_color = '#8884d8'
-    nested_color = '#82ca9d'
-    
-    # 1. Bar plot comparison across folds
-    folds = range(1, len(fold_results) + 1)
-    width = 0.35
-    
-    ax1.bar([x - width/2 for x in folds], fold_results, width, 
-            label='Stratified CV', color=strat_color, alpha=0.7)
-    ax1.bar([x + width/2 for x in folds], nested_scores, width, 
-            label='Nested CV', color=nested_color, alpha=0.7)
-    
-    ax1.set_xlabel('Fold Number', fontsize=10)
-    ax1.set_ylabel('RMSE Score', fontsize=10)
-    ax1.set_title('SVM: RMSE Comparison Across Folds', fontsize=12, pad=15)
-    ax1.set_xticks(folds)
-    ax1.grid(True, linestyle='--', alpha=0.3)
-    ax1.legend(fontsize=9)
-    
-    # 2. Box plot comparison
-    box_positions = [1, 2]
-    bp = ax2.boxplot([fold_results, nested_scores], 
-                     positions=box_positions,
-                     patch_artist=True,
-                     medianprops=dict(color="black"),
-                     flierprops=dict(marker='o', markerfacecolor='gray'))
-    
-    # Color the boxes
-    bp['boxes'][0].set_facecolor(strat_color)
-    bp['boxes'][1].set_facecolor(nested_color)
-    
-    ax2.set_xticks(box_positions)
-    ax2.set_xticklabels(['Stratified CV', 'Nested CV'])
-    ax2.set_ylabel('RMSE Score', fontsize=10)
-    ax2.set_title('SVM: Distribution of RMSE Values', fontsize=12, pad=15)
-    ax2.grid(True, linestyle='--', alpha=0.3)
-    
-    # 3. Line plot showing trends across folds
-    ax3.plot(folds, fold_results, 'o-', label='Stratified CV', 
-             color=strat_color, linewidth=2, markersize=8)
-    ax3.plot(folds, nested_scores, 'o-', label='Nested CV', 
-             color=nested_color, linewidth=2, markersize=8)
-    
-    ax3.set_xlabel('Fold Number', fontsize=10)
-    ax3.set_ylabel('RMSE Score', fontsize=10)
-    ax3.set_title('SVM: RMSE Trends Across Folds', fontsize=12, pad=15)
-    ax3.grid(True, linestyle='--', alpha=0.3)
-    ax3.legend(fontsize=9)
-    
-    # 4. Mean and std comparison
-    means = [np.mean(fold_results), np.mean(nested_scores)]
-    stds = [np.std(fold_results), np.std(nested_scores)]
-    
-    bars = ax4.bar(['Stratified CV', 'Nested CV'], means, yerr=stds, 
-                   capsize=5, alpha=0.7, color=[strat_color, nested_color])
-    
-    ax4.set_ylabel('Mean RMSE Score', fontsize=10)
-    ax4.set_title('SVM: Average RMSE with Standard Deviation', 
-                  fontsize=12, pad=15)
-    ax4.grid(True, linestyle='--', alpha=0.3)
-    
-    # Add text annotations with detailed statistics
-    stats_text = (
-        f'SVM Results\n\n'
-        f'Stratified CV:\n'
-        f'Mean RMSE: {np.mean(fold_results):.4f}\n'
-        f'Std Dev: {np.std(fold_results):.4f}\n'
-        f'Min RMSE: {np.min(fold_results):.4f}\n'
-        f'Max RMSE: {np.max(fold_results):.4f}\n\n'
-        f'Nested CV:\n'
-        f'Mean RMSE: {np.mean(nested_scores):.4f}\n'
-        f'Std Dev: {np.std(nested_scores):.4f}\n'
-        f'Min RMSE: {np.min(nested_scores):.4f}\n'
-        f'Max RMSE: {np.max(nested_scores):.4f}'
+    categorical_features = ['DRG Definition', 'Provider Name', 'Provider Street Address', 'Provider City', 'Provider State', 'Hospital Referral Region Description']
+    pt = PowerTransformer(method='yeo-johnson')
+    df['target_transformed'] = pt.fit_transform(df[['Average Total Payments']])
+    #df['target_transformed'] = np.log1p(df['Average Total Payments'])  # Log-transform target for better distribution
+    target = 'target_transformed'
+
+
+    #Initial train-test split
+    train_df, test_df = train_test_split(
+        df,
+        test_size=0.2,
+        stratify=pd.qcut(df[target], q=5, labels=False, duplicates='drop'),
+        random_state=SEED
     )
-    # Add the text in a better position
-    plt.figtext(0.02, 0.02, stats_text, fontsize=10, family='monospace', 
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
+    # Prepare outer CV
+    y_binned = pd.qcut(train_df[target], q=5, labels=False, duplicates='drop')
+    outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+
+    # Parallel processing with consistent parameter names
+    all_results = Parallel(n_jobs=-1, verbose=10, prefer='processes')(
+        delayed(process_fold)(
+            train_idx, test_idx, train_df, target,
+            numerical_features, categorical_features
+        )
+        for train_idx, test_idx in outer_cv.split(train_df, y_binned)
+    )
+
+    #Process results
+    results_df = pd.DataFrame(all_results)
     
-    # Adjust layout and display
-    plt.tight_layout()
-    return fig
+    # Helper function for parameter extraction
+    def get_mode_or_default(series, default='Not Available'):
+        modes = series.mode()
+        return modes[0] if not modes.empty else default
 
-# To use the visualization:
-fig = plot_cv_comparison(fold_results, nested_scores)
-plt.show()
+    # Cross-validation results
+    print("\n=== Cross-Validation Results ===")
+    print("Stratified Encoder Performance:")
+    print(f"Mean RMSE: {results_df['rmse_stratified'].mean():.2f}")
+    print("Best Parameters:")
+    print(f"C: {get_mode_or_default(results_df['best_C_stratified'])}")
+    print(f"kernel: {get_mode_or_default(results_df['best_kernel_stratified'])}")
+    print(f"gamma: {get_mode_or_default(results_df['best_gamma_stratified'])}")
+    
+    
+    print("\nSimple Encoder Performance:")
+    print(f"Mean RMSE: {results_df['rmse_simple'].mean():.2f}")
+    print("Best Parameters:")
+    print(f"C: {get_mode_or_default(results_df['best_C_simple'])}")
+    print(f"kernel: {get_mode_or_default(results_df['best_kernel_simple'])}")
+    print(f"gamma: {get_mode_or_default(results_df['best_gamma_simple'])}")
+    
 
- 
+    # Final test evaluation
+    final_results = {}
+    for enc_type in ['stratified', 'simple']:
+        # Get best parameters using mode
+        best_C = get_mode_or_default(results_df[f'best_C_{enc_type}'])
+        best_kernel = get_mode_or_default(results_df[f'best_kernel_{enc_type}'])
+        best_gamma = get_mode_or_default(results_df[f'best_gamma_{enc_type}'])
+        
+        
+        # Create final pipeline with TransformedTargetRegressor
+        pipe = Pipeline([
+            ('processor', FeatureProcessor(
+                numerical_features=numerical_features,
+                categorical_features=categorical_features,
+                encoder_cv_type=enc_type, 
+                n_bins=5,
+                
+            )),
+            ('regressor', TransformedTargetRegressor(
+                regressor=SVR(
+                    C=best_C,
+                    kernel=best_kernel,
+                    gamma=best_gamma,
+                    cache_size=2000
+                ),
+                transformer=StandardScaler()
+            ))
+        ])
+        
+        # Train and evaluate
+        pipe.fit(train_df.drop(columns=[target]), train_df[target])
+        preds = pipe.predict(test_df.drop(columns=[target]))
+        final_results[f'test_rmse_{enc_type}'] = np.sqrt(mean_squared_error(test_df[target], preds))
+    
+    # Print final results
+    print("\n=== Final Test Performance ===")
+    print(f"Stratified Encoder Test RMSE: {final_results['test_rmse_stratified']:.2f}")
+    print(f"Simple Encoder Test RMSE: {final_results['test_rmse_simple']:.2f}")   
+    
+    # Save results to disk
+    results_df.to_csv('cv_results.csv', index=False)
+    pd.DataFrame(final_results.items(), columns=['metric', 'value']).to_csv('test_results.csv', index=False)
+    
+    # Save plot data separately
+    plot_data = results_df[['rmse_stratified', 'rmse_simple']]
+    plot_data.to_csv('plot_data.csv', index=False)    
+#%%     
+# Visualize cross-validation results
+def load_and_plot():
+    # Load pre-computed results
+    plot_data = pd.read_csv('plot_data.csv')
+    test_results = pd.read_csv('test_results.csv')
+    
+    # Create larger figure with adjusted proportions
+    plt.figure(figsize=(10, 7))
+    ax = plt.gca()
+    
+    # Create plots
+    sns.boxplot(
+        data=plot_data,
+        palette=['#4c72b0', '#dd8452'],
+        width=0.5,
+        linewidth=1.5
+    )
+    
+    sns.swarmplot(
+        data=plot_data,
+        color='#2d3436',
+        size=6,
+        alpha=0.7
+    )
+    
+    # Customize plot
+    plt.title("Cross-Validation RMSE Comparison\nStratifiedCV vs SimpleCV for Encoding categorical features", pad=18)
+    plt.ylabel("RMSE", labelpad=12)
+    plt.xlabel("Encoding Strategy", labelpad=12)
+    
+    # Calculate axis limits before annotations
+    y_min, y_max = ax.get_ylim()
+    
+    # Add annotations with dynamic positioning
+    means = plot_data.mean()
+    for i, mean in enumerate(means):
+        plt.text(
+            i, 
+            mean,
+            f'Mean: {mean:.2f}',
+            ha='center',
+            va='top',
+            fontsize=12,
+            color='#d63031',
+            bbox=dict(
+                facecolor='white',
+                edgecolor='#d63031',
+                boxstyle='round,pad=0.2'
+            )
+        )
+    
+    # Manual layout adjustment
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig('results_plot.png', bbox_inches='tight')
+    plt.close()
+
+if __name__ == "__main__":
+    load_and_plot()
 # %%

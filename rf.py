@@ -17,7 +17,9 @@ from category_encoders import GLMMEncoder
 from sklearn.preprocessing import StandardScaler  
 from sklearn.metrics import mean_squared_error  
 from sklearn.compose import TransformedTargetRegressor  
-from sklearn.base import BaseEstimator, TransformerMixin  
+from sklearn.base import BaseEstimator, TransformerMixin 
+from sklearn.preprocessing import PowerTransformer
+from sklearn.preprocessing import QuantileTransformer 
 import os  
 #%%
 #Set random seed
@@ -132,10 +134,10 @@ def process_fold(train_idx, test_idx, df, target, numerical_features, categorica
         # Create inner CV strategy
         if enc_type == 'stratified':
             y_binned = pd.qcut(y_train, q=5, labels=False, duplicates='drop')
-            inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=SEED)
+            inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
             inner_splits = inner_cv.split(X_train, y_binned)
         else:
-            inner_cv = KFold(n_splits=3, shuffle=True, random_state=SEED)
+            inner_cv = KFold(n_splits=5, shuffle=True, random_state=SEED)
             inner_splits = inner_cv.split(X_train)
 
         # Hyperparameter grid for Random Forest
@@ -175,14 +177,17 @@ def process_fold(train_idx, test_idx, df, target, numerical_features, categorica
 #Main execution block
 if __name__ == "__main__":
     #Load and prepare data
-    df = pd.read_csv('dataset/IPPS_sampled.csv')
+    df = pd.read_csv('dataset/IPPS.csv')
     df.columns = df.columns.str.strip()
     
     #Consistent feature naming throughout
-    numerical_features = ['Provider Id', 'Provider Zip Code', 'Total Discharges', 'Average Covered Charges', 'Average Medicare Payments']
+    numerical_features = ['Total Discharges', 'Average Covered Charges', 'Average Medicare Payments']
     
     categorical_features = ['DRG Definition', 'Provider Name', 'Provider Street Address', 'Provider City', 'Provider State', 'Hospital Referral Region Description']
-    target = 'Average Total Payments'
+    qt = QuantileTransformer(output_distribution='normal')
+    df['target_transformed'] = qt.fit_transform(df[['Average Total Payments']])
+    #df['target_transformed'] = np.log1p(df['Average Total Payments'])  # Log-transform target for better distribution
+    target = 'target_transformed'
 
     #Initial train-test split
     train_df, test_df = train_test_split(
@@ -303,7 +308,7 @@ def load_and_plot():
     )
     
     # Customize plot with safer margins
-    plt.title("Cross-Validation RMSE Comparison\nStratified vs Simple Encoding", pad=18)  # Reduced pad
+    plt.title("Cross-Validation RMSE Comparison\nStratifiedCV vs SimpleCV for Encoding categorical features", pad=18)  # Reduced pad
     plt.ylabel("RMSE", labelpad=12)  # Reduced label padding
     plt.xlabel("Encoding Strategy", labelpad=12)
     
