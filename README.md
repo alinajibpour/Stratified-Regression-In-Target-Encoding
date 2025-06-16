@@ -14,4 +14,8 @@ These scripts investigate the application of the TargetEncoder in scikit-learn, 
 
 These files apply the Generalized Linear Mixed Model (GLMM) Encoder for encoding categorical variables to find out whether using stratification with cross-validation when applying GLMM encoder for encoding categorical features improve machine learning moderls.
 
+**Requirements**
+
+**Python Version**: The codebase requires **Python 3.11 or higher** due to compatibility constraints with the **target_encoder** package. Earlier versions of Python are not supported.
+
 
